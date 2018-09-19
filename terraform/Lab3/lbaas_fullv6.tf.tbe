@@ -1,0 +1,327 @@
+/*
+ * This example demonstrates round robin load balancing behavior by creating two instances, a configured
+ * vcn and a load balancer. The public IP of the load balancer is outputted after a successful run, curl
+ * this address to see the hostname change as different instances handle the request.
+ *
+ * NOTE: The https listener is included for completeness but should not be expected to work,
+ * it uses dummy certs.
+ */
+
+
+variable "tenancy_ocid" {}
+variable "user_ocid" {}
+variable "fingerprint" {}
+variable "private_key_path" {}
+variable "compartment_ocid" {}
+variable "region" {}
+variable "ssh_public_key" {}
+
+variable "InstanceImageOCID" {
+  type = "map"
+
+default = {
+        // Oracle-provided image "Oracle-Linux"
+        // See https://docs.us-phoenix-1.oraclecloud.com/Content/Resources/Assets/OracleProvidedImageOCIDs.pdf
+                    us-phoenix-1 = "ocid1.image.oc1.phx.aaaaaaaav4gjc4l232wx5g5drypbuiu375lemgdgnc7zg2wrdfmmtbtyrc5q"
+                    us-ashburn-1 = "ocid1.image.oc1.iad.aaaaaaaa2tq67tvbeavcmioghquci6p3pvqwbneq3vfy7fe7m7geiga4cnxa"
+        eu-frankfurt-1 = "ocid1.image.oc1.eu-frankfurt1.aaaaaaaajdge4yzm5j7ci7ryzte7f3qgcekljjw7p6nexhnsvwt6hoybcu3q"
+    }
+}
+
+provider "oci" {
+  tenancy_ocid     = "${var.tenancy_ocid}"
+  user_ocid        = "${var.user_ocid}"
+  fingerprint      = "${var.fingerprint}"
+  private_key_path = "${var.private_key_path}"
+  region           = "${var.region}"
+}
+
+data "oci_identity_availability_domains" "ADs" {
+  compartment_id = "${var.tenancy_ocid}"
+}
+
+/* Network */
+
+resource "oci_core_virtual_network" "meetociXX-TFVCN" {
+  cidr_block     = "10.YY.0.0/16"
+  compartment_id = "${var.compartment_ocid}"
+  display_name   = "meetociXX-TFVCN"
+  dns_label      = "meetociXXTFVCN"
+}
+
+#AD1
+resource "oci_core_subnet" "meetociXX-SN-1" {
+  availability_domain = "${lookup(data.oci_identity_availability_domains.ADs.availability_domains[D#1],"name")}"
+  cidr_block          = "10.YY.1.0/24"
+  display_name        = "meetociXX-SN-1"
+  dns_label           = "meetociXXSN1"
+  security_list_ids   = ["${oci_core_security_list.meetociXX-SL-1.id}"]
+  compartment_id      = "${var.compartment_ocid}"
+  vcn_id              = "${oci_core_virtual_network.meetociXX-TFVCN.id}"
+  route_table_id      = "${oci_core_route_table.meetociXX-RT-1.id}"
+  dhcp_options_id     = "${oci_core_virtual_network.meetociXX-TFVCN.default_dhcp_options_id}"
+
+  provisioner "local-exec" {
+    command = "sleep 5"
+  }
+}
+
+#AD2
+resource "oci_core_subnet" "meetociXX-SN-2" {
+  availability_domain = "${lookup(data.oci_identity_availability_domains.ADs.availability_domains[D#2],"name")}"
+  cidr_block          = "10.YY.2.0/24"
+  display_name        = "meetociXX-SN-2"
+  dns_label           = "meetociXXSN2"
+  security_list_ids   = ["${oci_core_security_list.meetociXX-SL-1.id}"]
+  compartment_id      = "${var.compartment_ocid}"
+  vcn_id              = "${oci_core_virtual_network.meetociXX-TFVCN.id}"
+  route_table_id      = "${oci_core_route_table.meetociXX-RT-1.id}"
+  dhcp_options_id     = "${oci_core_virtual_network.meetociXX-TFVCN.default_dhcp_options_id}"
+
+  provisioner "local-exec" {
+    command = "sleep 5"
+  }
+}
+
+resource "oci_core_internet_gateway" "meetociXX-IGW" {
+  compartment_id = "${var.compartment_ocid}"
+  display_name   = "meetociXX-IGW"
+  vcn_id         = "${oci_core_virtual_network.meetociXX-TFVCN.id}"
+}
+
+resource "oci_core_route_table" "meetociXX-RT-1" {
+  compartment_id = "${var.compartment_ocid}"
+  vcn_id         = "${oci_core_virtual_network.meetociXX-TFVCN.id}"
+  display_name   = "meetociXX-RT-1"
+
+  route_rules {
+    cidr_block        = "0.0.0.0/0"
+    network_entity_id = "${oci_core_internet_gateway.meetociXX-IGW.id}"
+  }
+}
+
+resource "oci_core_security_list" "meetociXX-SL-1" {
+  display_name   = "public"
+  compartment_id = "${oci_core_virtual_network.meetociXX-TFVCN.compartment_id}"
+  vcn_id         = "${oci_core_virtual_network.meetociXX-TFVCN.id}"
+
+  egress_security_rules = [{
+    protocol    = "all"
+    destination = "0.0.0.0/0"
+  }]
+
+  ingress_security_rules = [{
+    tcp_options {
+      "max" = 22
+      "min" = 22
+    }
+
+    protocol = "6"
+    source   = "0.0.0.0/0"
+  },
+    {
+      tcp_options {
+        "max" = 80
+        "min" = 80
+      }
+
+      protocol = "6"
+      source   = "0.0.0.0/0"
+    },
+    {
+      tcp_options {
+        "max" = 443
+        "min" = 443
+      }
+
+      protocol = "6"
+      source   = "0.0.0.0/0"
+    },
+    {
+      icmp_options {
+        "type" = 0
+      }
+
+      protocol = 1
+      source   = "0.0.0.0/0"
+    },
+    {
+      icmp_options {
+        "type" = 3
+        "code" = 4
+      }
+
+      protocol = 1
+      source   = "0.0.0.0/0"
+    },
+    {
+      icmp_options {
+        "type" = 8
+      }
+
+      protocol = 1
+      source   = "0.0.0.0/0"
+    },
+  ]
+}
+
+/* Instances */
+
+resource "oci_core_instance" "meetociXX-TFSRV-1" {
+  availability_domain = "${lookup(data.oci_identity_availability_domains.ADs.availability_domains[D#1],"name")}"
+  compartment_id      = "${var.compartment_ocid}"
+  display_name        = "meetociXX-TFSRV-1"
+  image               = "${var.InstanceImageOCID[var.region]}"
+  shape               = "VM.Standard1.2"
+  subnet_id           = "${oci_core_subnet.meetociXX-SN-1.id}"
+  hostname_label      = "meetociXX-TFSRV-1"
+
+  metadata {
+    ssh_authorized_keys = "${var.ssh_public_key}"
+    user_data = "${base64encode(var.user-data)}"
+  }
+}
+
+resource "oci_core_instance" "meetociXX-TFSRV-2" {
+  availability_domain = "${lookup(data.oci_identity_availability_domains.ADs.availability_domains[D#2],"name")}"
+  compartment_id      = "${var.compartment_ocid}"
+  display_name        = "meetociXX-TFSRV-2"
+  image               = "${var.InstanceImageOCID[var.region]}"
+  shape               = "VM.Standard1.2"
+  subnet_id           = "${oci_core_subnet.meetociXX-SN-2.id}"
+  hostname_label      = "meetociXX-TFSRV-2"
+
+  metadata {
+    ssh_authorized_keys = "${var.ssh_public_key}"
+    user_data = "${base64encode(var.user-data)}"
+  }
+}
+
+variable "user-data" {
+  default = <<EOF
+#!/bin/bash -x
+echo '################### webserver userdata begins #####################'
+touch ~meetociXX/userdata.`date +%s`.start
+
+# echo '########## yum update all ###############'
+# yum update -y
+
+echo '########## basic webserver ##############'
+yum install -y httpd
+systemctl enable  httpd.service
+systemctl start  httpd.service
+
+echo '<html><head></head><body><pre><code>' > /var/www/html/index.html
+
+hostname >> /var/www/html/index.html
+
+echo '' >> /var/www/html/index.html
+
+cat /etc/os-release >> /var/www/html/index.html
+
+echo '<p>' >> /var/www/html/index.html
+
+ip addr show >> /var/www/html/index.html 2>&1
+
+echo '<p>' >> /var/www/html/index.html
+
+curl ifconfig.co >> /var/www/html/index.html
+
+ifconfig -a | grep -ie flags -ie netmask >> /var/www/html/index.html
+
+echo '<p>' >> /var/www/html/index.html
+
+curl ifconfig.co >> /var/www/html/index.html
+
+echo '</code></pre></body></html>' >> /var/www/html/index.html
+
+firewall-offline-cmd --add-service=http
+systemctl enable  firewalld
+systemctl restart  firewalld
+
+touch ~meetociXX/userdata.`date +%s`.finish
+echo '################### webserver userdata ends #######################'
+EOF
+}
+
+/* Load Balancer */
+
+resource "oci_load_balancer" "meetociXX-TFLB-1" {
+  shape          = "100Mbps"
+  compartment_id = "${var.compartment_ocid}"
+
+  subnet_ids = [
+    "${oci_core_subnet.meetociXX-SN-1.id}",
+    "${oci_core_subnet.meetociXX-SN-2.id}",
+  ]
+
+  display_name = "meetociXX-TFLB-1"
+}
+
+resource "oci_load_balancer_backendset" "meetociXX-BES-1" {
+  name             = "meetociXX-BES-1"
+  load_balancer_id = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  policy           = "ROUND_ROBIN"
+
+  health_checker {
+    port                = "80"
+    protocol            = "HTTP"
+    response_body_regex = ".*"
+    url_path            = "/"
+  }
+}
+
+resource "oci_load_balancer_certificate" "lb-cert1" {
+  load_balancer_id   = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  ca_certificate     = "-----BEGIN CERTIFICATE-----\nMIIBNzCB4gIJAKtwJkxUgNpzMA0GCSqGSIb3DQEBCwUAMCMxITAfBgNVBAoTGElu\ndGVybmV0IFdpZGdpdHMgUHR5IEx0ZDAeFw0xNzA0MTIyMTU3NTZaFw0xODA0MTIy\nMTU3NTZaMCMxITAfBgNVBAoTGEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDBcMA0G\nCSqGSIb3DQEBAQUAA0sAMEgCQQDlM8lz3BFJA6zBlsF63k9ajPVq3Q1WQoHQ3j35\n08DRKIfwqfV+CxL63W3dZrwL4TrjqorP5CQ36+I6OWALH2zVAgMBAAEwDQYJKoZI\nhvcNAQELBQADQQCEjHVQJoiiVpIIvDWF+4YDRReVuwzrvq2xduWw7CIsDWlYuGZT\nQKVY6tnTy2XpoUk0fqUvMB/M2HGQ1WqZGHs6\n-----END CERTIFICATE-----"
+  certificate_name   = "certificate1"
+  private_key        = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAOUzyXPcEUkDrMGWwXreT1qM9WrdDVZCgdDePfnTwNEoh/Cp9X4L\nEvrdbd1mvAvhOuOqis/kJDfr4jo5YAsfbNUCAwEAAQJAJz8k4bfvJceBT2zXGIj0\noZa9d1z+qaSdwfwsNJkzzRyGkj/j8yv5FV7KNdSfsBbStlcuxUm4i9o5LXhIA+iQ\ngQIhAPzStAN8+Rz3dWKTjRWuCfy+Pwcmyjl3pkMPSiXzgSJlAiEA6BUZWHP0b542\nu8AizBT3b3xKr1AH2nkIx9OHq7F/QbECIHzqqpDypa8/QVuUZegpVrvvT/r7mn1s\nddS6cDtyJgLVAiEA1Z5OFQeuL2sekBRbMyP9WOW7zMBKakLL3TqL/3JCYxECIAkG\nl96uo1MjK/66X5zQXBG7F2DN2CbcYEz0r3c3vvfq\n-----END RSA PRIVATE KEY-----"
+  public_certificate = "-----BEGIN CERTIFICATE-----\nMIIBNzCB4gIJAKtwJkxUgNpzMA0GCSqGSIb3DQEBCwUAMCMxITAfBgNVBAoTGElu\ndGVybmV0IFdpZGdpdHMgUHR5IEx0ZDAeFw0xNzA0MTIyMTU3NTZaFw0xODA0MTIy\nMTU3NTZaMCMxITAfBgNVBAoTGEludGVybmV0IFdpZGdpdHMgUHR5IEx0ZDBcMA0G\nCSqGSIb3DQEBAQUAA0sAMEgCQQDlM8lz3BFJA6zBlsF63k9ajPVq3Q1WQoHQ3j35\n08DRKIfwqfV+CxL63W3dZrwL4TrjqorP5CQ36+I6OWALH2zVAgMBAAEwDQYJKoZI\nhvcNAQELBQADQQCEjHVQJoiiVpIIvDWF+4YDRReVuwzrvq2xduWw7CIsDWlYuGZT\nQKVY6tnTy2XpoUk0fqUvMB/M2HGQ1WqZGHs6\n-----END CERTIFICATE-----"
+}
+
+resource "oci_load_balancer_listener" "meetociXX-TFLB-LSNR-1" {
+  load_balancer_id         = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  name                     = "http"
+  default_backend_set_name = "${oci_load_balancer_backendset.meetociXX-BES-1.id}"
+  port                     = 80
+  protocol                 = "HTTP"
+}
+
+resource "oci_load_balancer_listener" "meetociXX-TFLB-LSNR-2" {
+  load_balancer_id         = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  name                     = "https"
+  default_backend_set_name = "${oci_load_balancer_backendset.meetociXX-BES-1.id}"
+  port                     = 443
+  protocol                 = "HTTP"
+
+  ssl_configuration {
+    certificate_name        = "${oci_load_balancer_certificate.lb-cert1.certificate_name}"
+    verify_peer_certificate = false
+  }
+}
+
+resource "oci_load_balancer_backend" "meetociXX-TFLB-BE-1" {
+  load_balancer_id = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  backendset_name  = "${oci_load_balancer_backendset.meetociXX-BES-1.id}"
+  ip_address       = "${oci_core_instance.meetociXX-TFSRV-1.private_ip}"
+  port             = 80
+  backup           = false
+  drain            = false
+  offline          = false
+  weight           = 1
+}
+
+resource "oci_load_balancer_backend" "meetociXX-TFLB-BE-2" {
+  load_balancer_id = "${oci_load_balancer.meetociXX-TFLB-1.id}"
+  backendset_name  = "${oci_load_balancer_backendset.meetociXX-BES-1.id}"
+  ip_address       = "${oci_core_instance.meetociXX-TFSRV-2.private_ip}"
+  port             = 80
+  backup           = false
+  drain            = false
+  offline          = false
+  weight           = 1
+}
+
+output "lb_public_ip" {
+  value = ["${oci_load_balancer.meetociXX-TFLB-1.ip_addresses}"]
+}
